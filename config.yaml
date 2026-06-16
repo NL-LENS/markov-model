@@ -1,0 +1,161 @@
+# Configuration for the Markov life-event simulator.
+#
+# Everything the model needs is specified here: the global time rate, the
+# attribute value pools / distributions, the managed "resources" (start/end
+# event pairs that share an active value), and the events themselves with their
+# initial probabilities, attributes, and base transition probabilities.
+#
+# Transition probabilities are *base* values; at simulation time illegal targets
+# are masked out (e.g. you cannot start a second job before ending the active
+# one) and the remaining probabilities are renormalized.
+
+time_rate: 1.0
+
+# ---------------------------------------------------------------------------
+# Attribute definitions. Referenced by name from each event's `attributes` list.
+# ---------------------------------------------------------------------------
+attributes:
+  # Deterministic, advances by the number of completed educations. The n-th
+  # started education always carries the n-th degree, in order.
+  degree:
+    type: ordered
+    values: [primary, secondary, vocational, university]
+
+  # Sampled categorical with 10 company categories. The distribution is
+  # conditioned on the previous event via `probs_by_prev`: a fresh graduate
+  # (previous event `end_education`) tends to land at a lower-tier company, while
+  # someone switching jobs (`end_job`) tends to move up. `probs` is the fallback
+  # for any other predecessor (e.g. after a marriage event) and for the first
+  # event. Higher company index => higher salary mean, so this also shifts pay.
+  company:
+    type: categorical
+    values: [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9]
+    probs: [0.20, 0.16, 0.13, 0.11, 0.10, 0.09, 0.07, 0.06, 0.05, 0.03]
+    probs_by_prev:
+      end_education: [0.26, 0.20, 0.15, 0.12, 0.09, 0.07, 0.05, 0.03, 0.02, 0.01]
+      end_job:       [0.03, 0.05, 0.06, 0.07, 0.09, 0.10, 0.11, 0.13, 0.16, 0.20]
+
+  # Dummy attribute to prevent a person starting a marriage before the current has ended
+  person:
+    type: categorical
+    values: [p0]
+    probs: [1.0]
+
+  # Continuous salary, conditioned on the company sampled in the same event.
+  salary:
+    type: normal
+    condition_on: company
+    sd: 5.0
+    means:
+      c0: 30.0
+      c1: 35.0
+      c2: 40.0
+      c3: 45.0
+      c4: 50.0
+      c5: 55.0
+      c6: 60.0
+      c7: 65.0
+      c8: 70.0
+      c9: 80.0
+
+# ---------------------------------------------------------------------------
+# Managed resources: paired start/end events sharing one active value. The
+# start event samples/sets the active value; the end event copies it and clears
+# the resource.
+# ---------------------------------------------------------------------------
+resources:
+  education:
+    start_event: start_education
+    end_event: end_education
+    attribute: degree
+  job:
+    start_event: start_job
+    end_event: end_job
+    attribute: company
+  person:
+    start_event: start_marriage
+    end_event: end_marriage
+    attribute: person
+
+# ---------------------------------------------------------------------------
+# Events. `initial` is the probability of starting a sequence in this state
+# (omitted == 0). `transitions` are base next-event probabilities; nothing
+# transitions into `birth`, and `death` is absorbing.
+#
+# When timestamps are enabled, transitions are modulated by absolute age `t`
+# (cumulative time since the sequence start) via an optional per-event
+# `time_betas` block (same shape as `transitions`): the legal transition row is
+# tilted by `exp(beta * t)` and renormalized, i.e. P(i->j | t) ~ base_ij *
+# exp(beta_ij * t). A missing or zero beta leaves that edge time-independent, so
+# omitting `time_betas` reproduces the time-independent model exactly. Positive
+# beta makes an edge more likely with age (e.g. death), negative less likely.
+# ---------------------------------------------------------------------------
+events:
+  birth:
+    initial: 0.8
+    attributes: []
+    transitions:
+      start_education: 0.99
+      death: 0.01
+
+  start_education:
+    initial: 0.1
+    attributes: [degree]
+    transitions:
+      end_education: 0.95
+      start_marriage: 0.04
+      death: 0.01
+
+  end_education:
+    attributes: []
+    transitions:
+      start_education: 0.3
+      start_job: 0.4
+      start_marriage: 0.1
+      death: 0.05
+    time_betas:
+      death: 0.10
+      start_education: -0.10
+
+  start_job:
+    initial: 0.1
+    attributes: [company, salary]
+    transitions:
+      end_job: 0.65
+      start_marriage: 0.3
+      death: 0.05
+
+  end_job:
+    attributes: []
+    transitions:
+      start_job: 0.6
+      start_education: 0.3
+      death: 0.1
+    time_betas:
+      death: 0.10
+      start_education: -0.10
+
+  start_marriage:
+    attributes: [person]
+    transitions:
+      start_education: 0.1
+      end_education: 0.1
+      start_job: 0.3
+      end_job: 0.35
+      end_marriage: 0.1
+      death: 0.05
+
+  end_marriage:
+    attributes: []
+    transitions:
+      end_education: 0.05
+      start_job: 0.4
+      end_job: 0.2
+      death: 0.35
+    time_betas:
+      death: 0.05
+
+  death:
+    absorbing: true
+    attributes: []
+    transitions: {}
